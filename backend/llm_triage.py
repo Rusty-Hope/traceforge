@@ -60,18 +60,21 @@ def is_eligible(inc: Incident) -> bool:
 
 
 _client: OpenAI | None = None
+_client_cfg: tuple[str, str] | None = None
 
 
 def _get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        s = get_settings()
+    global _client, _client_cfg
+    s = get_settings()
+    cfg = (s.openrouter_base_url, s.openrouter_api_key)
+    if _client is None or _client_cfg != cfg:
         _client = OpenAI(
             base_url=s.openrouter_base_url,
             api_key=s.openrouter_api_key,
             timeout=30.0,
             default_headers={"HTTP-Referer": "http://localhost:5173", "X-Title": "TraceForge"},
         )
+        _client_cfg = cfg
     return _client
 
 
@@ -97,10 +100,10 @@ def run_triage_sweep(db: Session) -> dict:
 
     requeued, todo = 0, []
     for inc in backlog:
-        if inc.triage_state == "disabled":  # API key appeared -> re-arm
+        if inc.triage_state == "disabled":  # API key appeared -> re-arm immediately
             inc.triage_state = "pending"
             requeued += 1
-        elif is_eligible(inc):
+        if is_eligible(inc):
             todo.append(inc)
 
     done = cached = failed = 0
@@ -184,7 +187,7 @@ def _dispatch_alert(inc: Incident) -> None:
 
 def _digest(inc: Incident) -> dict:
     """Compact evidence payload — never raw bulk telemetry."""
-    return {
+    payload = {
         "service": inc.service,
         "level": inc.level,
         "canonical_template": inc.title,
@@ -195,6 +198,10 @@ def _digest(inc: Incident) -> dict:
         "cluster_confidence": round(inc.ml_confidence, 3),
         "example_log": inc.example_message[:400],
     }
+    radius = (inc.blast_radius or {}).get("services") or []
+    if radius:
+        payload["blast_radius_services"] = radius
+    return payload
 
 
 def _call_llm(digest: dict) -> tuple[TriageReport, dict]:

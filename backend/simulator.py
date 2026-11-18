@@ -5,7 +5,7 @@ failure scenarios (latency spike, memory leak, cascading DB pool exhaustion /
 circuit-breaker cascade) that ramp in over N ticks, then expire.
 
 CLI:      python -m backend.simulator --ticks 240 --inject db_pool_exhaustion@80
-Library:  TelemetrySimulator.tick() from a FastAPI startup task (Phase 2).
+Library:  TelemetrySimulator.tick() from a FastAPI startup task.
 """
 from __future__ import annotations
 
@@ -311,7 +311,7 @@ def main() -> None:
             if not args.quiet:
                 _print_summary(tick_no, len(events), summary)
             time.sleep(max(0.0, args.interval))
-        print("\nsim complete -> traceforge.db (WAL). Local ML only; LLM triage arrives in Phase 2.")
+        print("\nsim complete -> traceforge.db (WAL).")
     finally:
         db.close()
 

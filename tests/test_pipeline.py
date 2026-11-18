@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from backend.models import Incident, LogEvent, MetricWindow
-from backend.pipeline import analyze_cycle, ingest
+from backend.pipeline import analyze_cycle, clusterer, ingest, reset_engines, warm_engines
 
 BASE = datetime(2026, 1, 1, 0, 0, 0)
 
@@ -91,10 +91,83 @@ def test_extreme_window_is_flagged_and_score_propagates_to_incident(db):
 
 
 def test_ingest_persists_and_analyzes(db):
+    aware_ts = datetime(2026, 2, 1, 12, 0, tzinfo=timezone(timedelta(hours=2)))
     n = ingest(db, [
-        {"ts": _now(), "service": "orders-service",
+        {"ts": aware_ts, "service": "orders-service",
          "level": "ERROR", "message": "payment declined id=ord_aaa111bbb222 reason=insufficient_funds"},
     ])
     assert n == 1
     summary = analyze_cycle(db)
     assert summary["events"] == 1
+    inc = db.scalar(select(Incident))
+    assert inc.first_seen == datetime(2026, 2, 1, 10, 0)
+    assert inc.last_seen == datetime(2026, 2, 1, 10, 0)
+
+
+def test_cluster_merge_consolidates_persisted_incidents(db):
+    clu = clusterer()
+    clu.similarity = 0.99  # force two near-duplicate templates to fork initially
+    clu.refit_every = 10_000
+    t0 = datetime(2026, 1, 1, 1, 0, 0)
+    ingest(db, [
+        {"ts": t0, "service": "postgres-primary", "level": "INFO",
+         "message": "totally unrelated kernel panic at ring zero"},
+        {"ts": t0, "service": "orders-service", "level": "ERROR",
+         "message": "database pool exhausted timeout 30000 ms service one alpha beta gamma delta"},
+        {"ts": t0 + timedelta(seconds=1), "service": "orders-service", "level": "ERROR",
+         "message": "database pool exhausted timeout 30000 ms service two alpha beta gamma delta"},
+    ])
+    analyze_cycle(db)
+    assert len(db.scalars(select(Incident)).all()) == 2
+
+    clu._refit()
+    ingest(db, [
+        {"ts": t0 + timedelta(seconds=2), "service": "orders-service", "level": "ERROR",
+         "message": "database pool exhausted timeout 30000 ms service one alpha beta gamma delta"},
+    ])
+    analyze_cycle(db)
+    incidents = db.scalars(select(Incident)).all()
+    assert len(incidents) == 1
+    assert incidents[0].occurrences == 3
+
+
+def test_warm_engines_restores_clusterer_after_restart(db):
+    t0 = _now()
+    ingest(db, [
+        {"ts": t0, "service": "auth-service", "level": "ERROR",
+         "message": "keyring backend unavailable, falling back to env provider"},
+    ])
+    analyze_cycle(db)
+    original_fp = db.scalar(select(Incident)).fingerprint
+
+    reset_engines()
+    assert not clusterer().warmed
+    warm_engines(db)
+    assert clusterer().warmed
+    assert clusterer().cluster_count == 1
+    assert clusterer().assign("keyring backend unavailable, falling back to env provider").fingerprint == original_fp
+
+
+def test_blast_radius_correlates_historical_windows(db):
+    for i in range(12):
+        t = BASE + timedelta(seconds=2 * i)
+        is_err = i >= 9
+        for svc in ("postgres-primary", "orders-service"):
+            db.add(LogEvent(
+                ts=t + timedelta(milliseconds=100),
+                service=svc,
+                level="ERROR" if is_err else "INFO",
+                status_code=500 if is_err else 200,
+                latency_ms=800.0 if is_err else 20.0,
+                message="pool exhausted id=aaaa1111bbbb" if is_err else CLEAN_TEMPLATES[i % len(CLEAN_TEMPLATES)],
+            ))
+    # Tail event to close the last anomalous window
+    for svc in ("postgres-primary", "orders-service"):
+        _add_clean(db, BASE + timedelta(seconds=24), service=svc, lat=20.0)
+    db.commit()
+
+    analyze_cycle(db)
+    inc = db.scalar(select(Incident).where(Incident.title.contains("pool exhausted")))
+    assert inc is not None
+    assert inc.blast_radius is not None
+    assert "orders-service" in inc.blast_radius["services"] or "postgres-primary" in inc.blast_radius["services"]

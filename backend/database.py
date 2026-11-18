@@ -42,7 +42,7 @@ def get_session() -> Session:
 
 
 def get_db():
-    """FastAPI dependency (Phase 2)."""
+    """FastAPI dependency."""
     db = get_session()
     try:
         yield db

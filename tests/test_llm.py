@@ -1,11 +1,13 @@
 """Tests for the LLM worker contracts, dedup cache keys, and post-mortem rendering."""
+from datetime import datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
 from sqlalchemy import select
 
-from backend.llm_triage import _extract_json, cache_key, run_triage_sweep
-from backend.models import Incident, LLMCache
+from backend.llm_triage import _digest, _extract_json, cache_key, run_triage_sweep
+from backend.models import Incident, LLMCache, MetricWindow
 from backend.reporting import render_postmortem
 from backend.schemas import TriageReport
 
@@ -101,3 +103,48 @@ def test_postmortem_contains_all_sections(db):
         assert section in md, f"missing section: {section}"
     assert "z-ai/glm-5.3-flash" in md and "180+160 tokens" in md  # model provenance + token usage
     assert "payments-service" in md
+
+
+def test_sweep_rearms_and_processes_disabled_incidents_in_same_pass(db, monkeypatch):
+    inc = Incident(
+        fingerprint="d" * 64, service="orders-service", level="ERROR",
+        title="boom id=<id>", occurrences=5, max_anomaly_score=0.9,
+        triage_state="disabled", blast_radius={"services": ["api-gateway"], "source": "orders-service"},
+    )
+    db.add(inc)
+    db.commit()
+
+    digest = _digest(inc)
+    assert digest["blast_radius_services"] == ["api-gateway"]
+
+    import backend.llm_triage as m
+    monkeypatch.setattr(m, "llm_active", lambda: True)
+    monkeypatch.setattr(m, "_completion", lambda msgs, s: (
+        '{"severity":"high","root_cause_component":"orders-service",'
+        '"technical_explanation":"Timed out","remediation_steps":["Restart"],'
+        '"suggested_patch_snippet":""}',
+        {"prompt": 50, "completion": 30},
+    ))
+    summary = run_triage_sweep(db)
+    assert summary["requeued"] == 1
+    assert summary["processed"] == 1
+    refreshed = db.scalar(select(Incident))
+    assert refreshed.triage_state == "done"
+
+
+def test_postmortem_prefers_worst_window_within_incident_range(db):
+    t0 = datetime(2026, 1, 1, 10, 0, 0)
+    db.add(MetricWindow(ts=t0, service="orders-service", is_anomaly=True,
+                        error_rate=0.4, p95_latency_ms=450.0, anomaly_score=0.75))
+    db.add(MetricWindow(ts=t0 + timedelta(hours=2), service="orders-service", is_anomaly=True,
+                        error_rate=0.9, p95_latency_ms=2500.0, anomaly_score=0.99))
+    db.add(Incident(
+        fingerprint="c" * 64, service="orders-service", level="ERROR",
+        title="scoped error", occurrences=4, ml_confidence=0.9, max_anomaly_score=0.75,
+        first_seen=t0, last_seen=t0 + timedelta(seconds=10),
+    ))
+    db.commit()
+    inc = db.scalar(select(Incident))
+    md = render_postmortem(db, inc)
+    assert "p95=450ms" in md
+    assert "p95=2500ms" not in md

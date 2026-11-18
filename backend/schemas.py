@@ -93,7 +93,10 @@ class NotesIn(BaseModel):
 
 class InjectRequest(BaseModel):
     kind: Literal["latency_spike", "memory_leak", "db_pool_exhaustion", "cascade_failure"] = "db_pool_exhaustion"
-    service: str | None = None
+    service: Literal[
+        "api-gateway", "auth-service", "orders-service", "payments-service",
+        "inventory-service", "postgres-primary", "redis-cache",
+    ] | None = None
     ticks: int = Field(20, ge=2, le=120)
     intensity: float = Field(1.0, ge=0.1, le=5.0)
     fast_forward: bool = False

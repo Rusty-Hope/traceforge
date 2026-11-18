@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Incident } from "../types";
 import { fmtAge } from "../format";
 import { Panel, SevChip } from "./ui";
@@ -13,26 +13,47 @@ const LLM_STATE: Record<string, { label: string; cls: string }> = {
 
 const FILTERS = ["all", "open", "acknowledged", "resolved"];
 
-export function IncidentFeed({ incidents, selectedId, onSelect }: {
+export function IncidentFeed({ incidents, selectedId, onSelect, anchorMs }: {
   incidents: Incident[];
   selectedId: number | null;
   onSelect: (id: number) => void;
+  anchorMs: number;
 }) {
   const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? incidents : incidents.filter((i) => i.status === filter);
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return incidents.filter((i) => {
+      if (filter !== "all" && i.status !== filter) return false;
+      if (!q) return true;
+      return (
+        i.service.toLowerCase().includes(q)
+        || i.title.toLowerCase().includes(q)
+        || (i.root_cause_component ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [incidents, filter, query]);
 
   return (
     <Panel
       title="INCIDENT TRIAGE FEED"
       right={
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="filter..."
+            aria-label="Filter incidents"
+            className="hidden w-28 rounded-sm border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300 placeholder:text-zinc-700 focus:border-zinc-600 focus:outline-none sm:block"
+          />
           {FILTERS.map((f) => (
             <button key={f} onClick={() => setFilter(f)}
               className={`rounded-sm px-1.5 py-0.5 font-mono text-[9px] uppercase ${filter === f ? "bg-zinc-800 text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}>
               {f}
             </button>
           ))}
-          <span className="ml-2 font-mono text-[9px] text-zinc-600">{filtered.length}</span>
+          <span className="ml-1 font-mono text-[9px] text-zinc-600">{filtered.length}</span>
         </div>
       }
     >
@@ -55,14 +76,15 @@ export function IncidentFeed({ incidents, selectedId, onSelect }: {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={9} className="px-3 py-8 text-center font-mono text-[11px] text-zinc-600">
-                  no incidents {filter !== "all" ? `with status "${filter}"` : "yet — inject a scenario"}
+                  no incidents {filter !== "all" ? `with status "${filter}"` : query ? `matching "${query}"` : "yet — inject a scenario"}
                 </td>
               </tr>
             )}
             {filtered.map((inc) => {
               const llm = LLM_STATE[inc.triage_state] ?? LLM_STATE.pending;
               return (
-                <tr key={inc.id} onClick={() => onSelect(inc.id)}
+                <tr key={inc.id} data-incident-id={inc.id} onClick={() => onSelect(inc.id)}
+                    aria-selected={selectedId === inc.id}
                     className={`cursor-pointer border-b border-zinc-900 font-mono text-[11px] hover:bg-zinc-900/60 ${selectedId === inc.id ? "bg-zinc-900/70" : ""}`}>
                   <td className="px-3 py-1.5"><SevChip sev={inc.severity} state={inc.triage_state} /></td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-zinc-300">{inc.service}</td>
@@ -76,7 +98,7 @@ export function IncidentFeed({ incidents, selectedId, onSelect }: {
                     <span className={`inline-block rounded-sm border px-1.5 py-px text-[9px] ${llm.cls}`}>{llm.label}</span>
                   </td>
                   <td className="px-2 py-1.5 text-zinc-400">{inc.status}</td>
-                  <td className="px-3 py-1.5 text-right text-zinc-600">{fmtAge(inc.last_seen)}</td>
+                  <td className="px-3 py-1.5 text-right text-zinc-600">{fmtAge(inc.last_seen, anchorMs)}</td>
                 </tr>
               );
             })}

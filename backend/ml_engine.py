@@ -84,12 +84,13 @@ def pearson(a: Iterable[float], b: Iterable[float]) -> float:
     return float(((A - A.mean()) * (B - B.mean())).mean() / (sa * sb))
 
 
-def _naive_utc(ts: datetime) -> datetime:
+def naive_utc(ts: datetime) -> datetime:
+    """Convert a datetime (aware or naive) to naive UTC."""
     return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
 
 
 def window_start(ts: datetime, window_s: int) -> datetime:
-    ts = _naive_utc(ts)
+    ts = naive_utc(ts)
     epoch = datetime(1970, 1, 1)
     secs = int((ts - epoch).total_seconds())
     return epoch + timedelta(seconds=secs // window_s * window_s)
@@ -333,7 +334,8 @@ class LogClusterer:
     (cosine >= similarity) or seeds a new one; centroids are incremental
     directional means. The vectorizer bootstraps on the first `min_boot`
     unique templates and is refit on the rolling corpus every `refit_every`
-    assignments; near-duplicate clusters (cosine >= 0.85) are merged on refit.
+    assignments; near-duplicate clusters (cosine >= MERGE_SIMILARITY) are
+    merged on refit.
     """
 
     MERGE_SIMILARITY = 0.75  # near-duplicate templates differing by ~1 token score ~0.75-0.90
@@ -353,6 +355,7 @@ class LogClusterer:
         self._pending: list[str] = []       # cold-start buffer
         self._pending_seen = 0
         self._n_seen = 0
+        self._pending_merges: list[tuple[str, str]] = []
 
     @property
     def warmed(self) -> bool:
@@ -365,6 +368,45 @@ class LogClusterer:
     @property
     def corpus_size(self) -> int:
         return len(self._corpus)
+
+    def drain_merges(self) -> list[tuple[str, str]]:
+        """Return and clear `(keep_fp, drop_fp)` pairs produced during cluster merges."""
+        merges = list(self._pending_merges)
+        self._pending_merges.clear()
+        return merges
+
+    def warm_start(self, templates: Iterable[str],
+                   clusters: Iterable[tuple[str, str, int]] = ()) -> None:
+        """Restore corpus and cluster centroids from persisted DB state after a restart."""
+        cluster_list = list(clusters)
+        docs: dict[str, None] = {}
+        for t in templates:
+            norm = normalize_message(t)
+            if norm:
+                docs.setdefault(norm, None)
+        for fp, title, count in cluster_list:
+            docs.setdefault(title, None)
+            self._members.setdefault(fp, [title])
+            self._counts[fp] = max(1, count)
+        if not docs:
+            return
+        if len(docs) < self.min_boot and not cluster_list:
+            for t in docs:
+                if t not in self._pending:
+                    self._pending.append(t)
+            return
+        for t in list(docs)[-self.max_corpus:]:
+            self._corpus.setdefault(t, None)
+        self._vec = TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True)
+        try:
+            self._vec.fit(list(docs))
+        except ValueError:
+            self._vec = None
+            return
+        self._centroids = {
+            fp: self._unit(csr_matrix(np.asarray(self._vec.transform(members).mean(axis=0))))
+            for fp, members in self._members.items()
+        }
 
     def assign(self, message: str) -> ClusterAssignment:
         template = normalize_message(message)
@@ -450,6 +492,7 @@ class LogClusterer:
             del members[1:1 + excess]
         V = self._vec.transform(members)
         self._centroids[keep] = self._unit(csr_matrix(np.asarray(V.mean(axis=0))))
+        self._pending_merges.append((keep, drop))
 
     def _nearest(self, v: csr_matrix) -> tuple[str | None, float]:
         best_fp, best_sim = None, 0.0

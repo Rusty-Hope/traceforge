@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     contamination: float = 0.02
     cluster_similarity: float = 0.60
 
-    # Background LLM worker (OpenRouter) — consumed in Phase 2
+    # Background LLM worker (OpenRouter)
     llm_enabled: bool = True
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     alert_webhook_url: str = ""        # POSTed on triaged critical/high incidents; empty = off
     alert_min_severity: str = "high"
 
-    # CORS (frontend dev server, Phase 3)
+    # CORS (frontend dev server)
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 

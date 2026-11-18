@@ -7,20 +7,36 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .llm_triage import cache_key
+from .ml_engine import window_start
 from .models import Incident, LLMCache, MetricWindow
 
 
 def render_postmortem(db: Session, inc: Incident) -> str:
     triage = inc.triage or {}
+    win_start = window_start(inc.first_seen, get_settings().window_size_s)
     worst = db.scalar(
         select(MetricWindow)
-        .where(MetricWindow.service == inc.service, MetricWindow.is_anomaly.is_(True))
-        .order_by(MetricWindow.anomaly_score.desc()).limit(1)
+        .where(
+            MetricWindow.service == inc.service,
+            MetricWindow.is_anomaly.is_(True),
+            MetricWindow.ts >= win_start,
+            MetricWindow.ts <= inc.last_seen,
+        )
+        .order_by(MetricWindow.anomaly_score.desc())
+        .limit(1)
     )
+    if worst is None:
+        worst = db.scalar(
+            select(MetricWindow)
+            .where(MetricWindow.service == inc.service, MetricWindow.is_anomaly.is_(True))
+            .order_by(MetricWindow.anomaly_score.desc())
+            .limit(1)
+        )
     cache_row = db.get(LLMCache, cache_key(inc.fingerprint))
     model = cache_row.model if cache_row else "n/a"
-    duration = int(((inc.resolved_at or inc.last_seen) - inc.first_seen).total_seconds())
+    duration = max(0, int(((inc.resolved_at or inc.last_seen) - inc.first_seen).total_seconds()))
 
     lines = [
         f"# Post-Mortem: Incident #{inc.id} — {inc.service}",

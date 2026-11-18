@@ -180,8 +180,34 @@ def test_clusterer_merges_near_duplicate_clusters_on_refit():
     r2 = c.assign("database pool exhausted timeout 30000 ms service two alpha beta gamma delta")
     assert r1.created and r2.created, "with a 0.99 threshold the pair must fork into two clusters"
     assert c.cluster_count == 3
-    c._refit()  # refit merges near-duplicate centroids (cosine >= 0.85)
+    c._refit()  # refit merges near-duplicate centroids (cosine >= MERGE_SIMILARITY)
     assert c.cluster_count == 2
+    merges = c.drain_merges()
+    assert len(merges) == 1
+    assert c.drain_merges() == []
+
+
+def test_clusterer_warm_start_restores_clusters():
+    c = LogClusterer(similarity=0.6, min_boot=30)
+    fp = fingerprint("connection pool exhausted timeout <num> ms")
+    c.warm_start(
+        templates=["GET /v1/orders 200 40ms", "token issued sub=abc123"],
+        clusters=[(fp, "connection pool exhausted timeout <num> ms", 7)],
+    )
+    assert c.warmed
+    assert c.cluster_count == 1
+    hit = c.assign("connection pool exhausted timeout 1200 ms")
+    assert hit.fingerprint == fp
+    assert not hit.created
+
+
+def test_naive_utc_normalizes_aware_timestamps():
+    from datetime import timezone
+    from backend.ml_engine import naive_utc
+
+    aware = datetime(2026, 1, 1, 12, 0, tzinfo=timezone(timedelta(hours=5)))
+    assert naive_utc(aware) == datetime(2026, 1, 1, 7, 0)
+    assert naive_utc(aware).tzinfo is None
 
 
 def test_fingerprint_keys_llm_cache():

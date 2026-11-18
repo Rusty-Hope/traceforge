@@ -1,8 +1,19 @@
 # TraceForge
 
+[![CI](https://github.com/Rusty-Hope/traceforge/actions/workflows/ci.yml/badge.svg)](https://github.com/Rusty-Hope/traceforge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-zinc.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](requirements.txt)
+[![React + TypeScript](https://img.shields.io/badge/frontend-React%2018%20%2B%20TS-3178c6.svg)](frontend/package.json)
+
 **Hybrid ML & background-LLM telemetry / incident-triage engine. Local-first, single-binary, zero-cost hot path.**
 
 TraceForge ingests telemetry (synthetic chaos or your real services), detects anomalies and clusters noisy stack traces into canonical incident fingerprints with **local scikit-learn models**, and only then — on confirmed, deduplicated anomalies — lets a **background LLM worker** produce structured root-cause triage via OpenRouter. It also forecasts p95 drift, correlates blast radius across services, fires webhook alerts, and exports post-mortems.
+
+## Dashboard
+
+| Live Telemetry & Incident Triage Feed | Incident Detail, Blast Radius & LLM Triage |
+|---|---|
+| ![TraceForge Dashboard](docs/screenshots/dashboard.png) | ![Incident Detail](docs/screenshots/incident-detail.png) |
 
 ## Design principles
 
@@ -99,8 +110,8 @@ make api
 ### Tests
 
 ```bash
-make test               # 25 tests: normalization, clustering, detection, pipeline idempotency,
-                        # cache keys, schema contracts, post-mortem rendering
+make test               # 35 tests: ML units, pipeline idempotency & cluster merges,
+                        # blast radius, LLM cache & schema contracts, FastAPI endpoints
 ```
 
 ### Offline ML-only demo

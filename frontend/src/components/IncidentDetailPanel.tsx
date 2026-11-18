@@ -17,16 +17,18 @@ function MiniBtn({ children, onClick, active = false }: { children: ReactNode; o
 export function IncidentDetailPanel({ detail, engines, onStatus, onFeedback, onNotes }: {
   detail: IncidentDetail | null;
   engines: EngineStatus | null;
-  onStatus: (id: number, status: string) => void;
-  onFeedback: (id: number, verdict: "confirmed" | "rejected", actualCause: string | null) => void;
-  onNotes: (id: number, notes: string) => void;
+  onStatus: (id: number, status: string) => void | Promise<void>;
+  onFeedback: (id: number, verdict: "confirmed" | "rejected", actualCause: string | null) => void | Promise<void>;
+  onNotes: (id: number, notes: string) => void | Promise<void>;
 }) {
   const [cause, setCause] = useState("");
   const [notes, setNotes] = useState("");
+  const [savedNotes, setSavedNotes] = useState(false);
 
   useEffect(() => {
     setCause("");
     setNotes(detail?.resolution_notes ?? "");
+    setSavedNotes(false);
   }, [detail?.id, detail?.resolution_notes]);
 
   if (!detail) {
@@ -43,6 +45,12 @@ export function IncidentDetailPanel({ detail, engines, onStatus, onFeedback, onN
   const radius = inc.blast_radius?.services ?? [];
   const tokens = detail.tokens ? detail.tokens.prompt + detail.tokens.completion : 0;
 
+  const saveNotes = async () => {
+    await onNotes(inc.id, notes);
+    setSavedNotes(true);
+    setTimeout(() => setSavedNotes(false), 2000);
+  };
+
   return (
     <Panel
       title={`INCIDENT #${inc.id}`}
@@ -54,17 +62,11 @@ export function IncidentDetailPanel({ detail, engines, onStatus, onFeedback, onN
               <span className="flex items-center gap-1"><CheckCheck className="h-3 w-3" />RESOLVE</span>
             </MiniBtn>
           )}
-          {inc.status === "resolved" ? (
-            <a href={postmortemUrl(inc.id)} target="_blank" rel="noreferrer"
-               className="flex items-center gap-1 rounded-sm border border-zinc-700 px-2 py-0.5 font-mono text-[9px] tracking-wider text-zinc-300 hover:border-zinc-500 hover:text-zinc-100">
-              <FileDown className="h-3 w-3" />POST-MORTEM .MD
-            </a>
-          ) : (
-            <span title="resolve the incident to export a post-mortem"
-                  className="flex items-center gap-1 rounded-sm border border-zinc-800 px-2 py-0.5 font-mono text-[9px] tracking-wider text-zinc-600">
-              <FileDown className="h-3 w-3" />POST-MORTEM .MD
-            </span>
-          )}
+          <a href={postmortemUrl(inc.id)} target="_blank" rel="noreferrer"
+             title={inc.status === "resolved" ? "download markdown post-mortem" : "export draft post-mortem"}
+             className="flex items-center gap-1 rounded-sm border border-zinc-700 px-2 py-0.5 font-mono text-[9px] tracking-wider text-zinc-300 hover:border-zinc-500 hover:text-zinc-100">
+            <FileDown className="h-3 w-3" />POST-MORTEM .MD
+          </a>
         </div>
       }
     >
@@ -157,18 +159,24 @@ export function IncidentDetailPanel({ detail, engines, onStatus, onFeedback, onN
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3}
               placeholder="what actually happened / what fixed it"
               className="w-full resize-y rounded-sm border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-[10.5px] leading-relaxed text-zinc-300 placeholder:text-zinc-700 focus:border-zinc-600 focus:outline-none" />
-            <div className="mt-1.5">
-              <MiniBtn onClick={() => onNotes(inc.id, notes)}>SAVE NOTES</MiniBtn>
+            <div className="mt-1.5 flex items-center gap-2">
+              <MiniBtn onClick={saveNotes}>SAVE NOTES</MiniBtn>
+              {savedNotes && <span className="font-mono text-[9px] text-emerald-400">saved</span>}
             </div>
           </Section>
         )}
 
         <Section label="RAW SAMPLES">
           <div className="rounded-sm border border-zinc-800/80 bg-zinc-950/40 px-3 py-1">
-            {detail.samples.slice(0, 6).map((s) => (
-              <div key={s.trace_id} className="flex gap-2 border-b border-zinc-900 py-1 font-mono text-[10.5px] last:border-0">
+            {detail.samples.slice(0, 6).map((s, idx) => (
+              <div key={`${s.trace_id}-${s.ts}-${idx}`} className="flex gap-2 border-b border-zinc-900 py-1 font-mono text-[10.5px] last:border-0">
                 <span className="shrink-0 text-zinc-600">{s.ts.slice(11, 19)}</span>
-                <span className={`shrink-0 ${s.level === "ERROR" ? "text-red-400/80" : "text-zinc-500"}`}>{s.level}</span>
+                <span className={`shrink-0 ${s.level === "ERROR" || s.level === "FATAL" ? "text-red-400/80" : "text-zinc-500"}`}>{s.level}</span>
+                {(s.status_code !== null || s.latency_ms !== null) && (
+                  <span className="shrink-0 text-zinc-600">
+                    {[s.status_code, s.latency_ms != null ? `${Math.round(s.latency_ms)}ms` : null].filter(Boolean).join("·")}
+                  </span>
+                )}
                 <span className="min-w-0 break-all text-zinc-400">{s.message}</span>
               </div>
             ))}

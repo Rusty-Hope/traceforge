@@ -76,7 +76,7 @@ class Incident(Base):
     first_seen: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     example_message: Mapped[str] = mapped_column(Text, default="")
-    # Background LLM worker (Phase 2) — never blocks ingestion.
+    # Background LLM worker — never blocks ingestion.
     severity: Mapped[str | None] = mapped_column(String(16))
     root_cause_component: Mapped[str | None] = mapped_column(String(64))
     triage: Mapped[dict | None] = mapped_column(JSON)

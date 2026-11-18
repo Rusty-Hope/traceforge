@@ -39,7 +39,7 @@ export default function TelemetryCharts({ points, range, onRange }: {
   range: number;
   onRange: (minutes: number) => void;
 }) {
-  const services = useMemo(() => [...new Set(points.map((p) => p.service))], [points]);
+  const services = useMemo(() => [...new Set(points.map((p) => p.service))].sort(), [points]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {

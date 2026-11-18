@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, subscribe } from "./api";
 import { ChaosControls } from "./components/ChaosControls";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -6,6 +6,7 @@ import { IncidentDetailPanel } from "./components/IncidentDetailPanel";
 import { IncidentFeed } from "./components/IncidentFeed";
 import { SystemStrip } from "./components/SystemStrip";
 import { TopBar } from "./components/TopBar";
+import { parseTs } from "./format";
 import type { EngineStatus, Incident, IncidentDetail, WindowPoint } from "./types";
 
 const TelemetryCharts = lazy(() => import("./components/TelemetryCharts"));
@@ -107,19 +108,44 @@ export default function App() {
     return () => { alive = false; };
   }, [selectedId, incidents]);
 
+  const anchorMs = useMemo(() => {
+    let maxMs = Date.now();
+    for (const p of points) {
+      const t = parseTs(p.ts).getTime();
+      if (t > maxMs) maxMs = t;
+    }
+    for (const i of incidents) {
+      const t = parseTs(i.last_seen).getTime();
+      if (t > maxMs) maxMs = t;
+    }
+    return maxMs;
+  }, [points, incidents]);
+
   const handleStatus = useCallback(async (id: number, status: string) => {
-    await api.setStatus(id, status);
-    await refreshRef.current();
+    try {
+      await api.setStatus(id, status);
+      await refreshRef.current();
+    } catch (err) {
+      setError(String(err));
+    }
   }, []);
 
   const handleFeedback = useCallback(async (id: number, verdict: "confirmed" | "rejected", cause: string | null) => {
-    await api.feedback(id, verdict, cause);
-    await refreshRef.current();
+    try {
+      await api.feedback(id, verdict, cause);
+      await refreshRef.current();
+    } catch (err) {
+      setError(String(err));
+    }
   }, []);
 
   const handleNotes = useCallback(async (id: number, notes: string) => {
-    await api.notes(id, notes);
-    await refreshRef.current();
+    try {
+      await api.notes(id, notes);
+      await refreshRef.current();
+    } catch (err) {
+      setError(String(err));
+    }
   }, []);
 
   return (
@@ -142,7 +168,7 @@ export default function App() {
               <TelemetryCharts points={points} range={range} onRange={setRange} />
             </Suspense>
           </ErrorBoundary>
-          <IncidentFeed incidents={incidents} selectedId={selectedId} onSelect={setSelectedId} />
+          <IncidentFeed incidents={incidents} selectedId={selectedId} onSelect={setSelectedId} anchorMs={anchorMs} />
         </div>
         <div className="flex w-full shrink-0 flex-col gap-3 xl:w-[400px]">
           <ErrorBoundary>

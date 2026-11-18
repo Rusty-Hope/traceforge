@@ -7,6 +7,7 @@ External telemetry can enter via POST /api/ingest (token-gated).
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import uuid
@@ -25,8 +26,9 @@ from . import events
 from .config import get_settings
 from .database import get_db, get_session, init_db
 from .llm_triage import cache_key, llm_active, run_triage_sweep
+from .ml_engine import naive_utc
 from .models import Incident, LLMCache, LogEvent, MetricWindow, utcnow
-from .pipeline import analyze_cycle, clusterer, detector_stats, ingest, prune_old_events
+from .pipeline import analyze_cycle, clusterer, detector_stats, ingest, prune_old_events, warm_engines
 from .reporting import render_postmortem
 from .schemas import (
     EngineStatus,
@@ -121,20 +123,23 @@ def _ingest_batch(payload: list[dict]) -> dict:
 
 
 def _run_burst(sim: TelemetrySimulator, ticks: int) -> dict:
-    total, last = 0, {"events": 0, "new_incidents": []}
+    total, created = 0, []
     db = get_session()
     try:
         for _ in range(ticks):
             total += ingest(db, sim.tick())
-            last = analyze_cycle(db)
+            summary = analyze_cycle(db)
+            created.extend(summary["new_incidents"])
     finally:
         db.close()
-    return {"events": total, "new_incidents": last["new_incidents"]}
+    return {"events": total, "new_incidents": created}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    with get_session() as db:
+        warm_engines(db)
     s = get_settings()
     app.state.simulator = TelemetrySimulator()
     app.state.sim_lock = asyncio.Lock()
@@ -181,7 +186,9 @@ def health():
 def engines(db: Session = Depends(get_db)):
     s = get_settings()
     clu = clusterer()
-    hour_ago = utcnow() - timedelta(hours=1)
+    latest_ts = db.scalar(select(func.max(MetricWindow.ts)))
+    ref = max(utcnow(), latest_ts) if latest_ts is not None else utcnow()
+    hour_ago = ref - timedelta(hours=1)
     return EngineStatus(
         clusterer={"warmed": clu.warmed, "clusters": clu.cluster_count, "corpus": clu.corpus_size},
         detectors=detector_stats(),
@@ -205,7 +212,9 @@ def engines(db: Session = Depends(get_db)):
 # ── telemetry ────────────────────────────────────────────────────────────────
 @app.get("/api/metrics/timeseries", response_model=list[WindowPoint])
 def timeseries(service: str | None = None, minutes: int = 60, db: Session = Depends(get_db)):
-    q = select(MetricWindow).where(MetricWindow.ts >= utcnow() - timedelta(minutes=min(minutes, 1440)))
+    latest_ts = db.scalar(select(func.max(MetricWindow.ts)))
+    ref = latest_ts or utcnow()
+    q = select(MetricWindow).where(MetricWindow.ts >= ref - timedelta(minutes=min(max(minutes, 1), 1440)))
     if service:
         q = q.where(MetricWindow.service == service)
     return db.scalars(q.order_by(MetricWindow.ts).limit(3000)).all()
@@ -218,8 +227,10 @@ def services(db: Session = Depends(get_db)):
         select(Incident.service, func.count())
         .where(Incident.status != "resolved").group_by(Incident.service)
     ).all())
+    known_svcs = db.scalars(select(MetricWindow.service).distinct()).all()
+    all_svcs = list(dict.fromkeys([*SERVICES, *det.keys(), *open_counts.keys(), *known_svcs]))
     out: list[ServiceSummary] = []
-    for svc in SERVICES:
+    for svc in all_svcs:
         d = det.get(svc, {"fitted": False, "baseline_size": 0, "threshold": 0.0})
         latest = db.scalar(select(MetricWindow).where(MetricWindow.service == svc)
                            .order_by(MetricWindow.ts.desc()).limit(1))
@@ -250,12 +261,14 @@ async def stream(request: Request):
 @app.post("/api/ingest", response_model=IngestResponse)
 async def ingest_events(request: Request, events_batch: list[IngestEvent]):
     s = get_settings()
-    if s.ingest_token and request.headers.get("x-ingest-token") != s.ingest_token:
-        raise HTTPException(401, "invalid ingest token")
+    if s.ingest_token:
+        supplied = request.headers.get("x-ingest-token", "")
+        if not hmac.compare_digest(supplied, s.ingest_token):
+            raise HTTPException(401, "invalid ingest token")
     payload = []
     for e in events_batch:
         d = e.model_dump()
-        d["ts"] = d["ts"] or utcnow()
+        d["ts"] = naive_utc(d["ts"]) if d["ts"] is not None else utcnow()
         d["trace_id"] = d["trace_id"] or uuid.uuid4().hex[:16]
         payload.append(d)
     result = await asyncio.to_thread(_ingest_batch, payload)
@@ -296,7 +309,7 @@ def set_incident_status(incident_id: int, payload: StatusUpdate, db: Session = D
     if inc is None:
         raise HTTPException(404, "incident not found")
     inc.status = payload.status
-    inc.resolved_at = utcnow() if payload.status == "resolved" else None
+    inc.resolved_at = max(utcnow(), inc.last_seen) if payload.status == "resolved" else None
     db.commit()
     db.refresh(inc)
     return inc
@@ -342,16 +355,16 @@ def postmortem(incident_id: int, db: Session = Depends(get_db)):
 @app.post("/api/simulate/incident", response_model=InjectResponse)
 async def inject_incident(payload: InjectRequest):
     sim: TelemetrySimulator = app.state.simulator
-    sc = sim.inject(payload.kind, service=payload.service,
-                    ticks=payload.ticks, intensity=payload.intensity)
-    scenario = {"kind": sc.kind, "service": sc.service, "ticks": sc.total_ticks, "intensity": sc.intensity}
-    if payload.fast_forward:
-        async with app.state.sim_lock:
+    async with app.state.sim_lock:
+        sc = sim.inject(payload.kind, service=payload.service,
+                        ticks=payload.ticks, intensity=payload.intensity)
+        scenario = {"kind": sc.kind, "service": sc.service, "ticks": sc.total_ticks, "intensity": sc.intensity}
+        if payload.fast_forward:
             result = await asyncio.to_thread(_run_burst, sim, payload.ticks + 2)
-        return InjectResponse(scenario=scenario, fast_forwarded=True,
-                              events_generated=result["events"],
-                              new_incidents=result["new_incidents"],
-                              note="materialized immediately")
+            return InjectResponse(scenario=scenario, fast_forwarded=True,
+                                  events_generated=result["events"],
+                                  new_incidents=result["new_incidents"],
+                                  note="materialized immediately")
     eta = round(sc.total_ticks * get_settings().simulate_interval_s, 1)
     return InjectResponse(scenario=scenario, fast_forwarded=False,
                           note=f"queued; the background stream materializes it in ~{eta}s")
