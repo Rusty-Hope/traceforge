@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traceforge"
+version = "0.4.0"
+description = "Hybrid ML & background-LLM telemetry and incident-triage engine"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Rustem (Rusty-Hope)" }]
+keywords = [
+  "observability",
+  "telemetry",
+  "anomaly-detection",
+  "isolation-forest",
+  "log-clustering",
+  "incident-triage",
+  "fastapi",
+  "aiops",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: System :: Monitoring",
+]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "sqlalchemy>=2.0.36",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "scikit-learn>=1.5.2",
+  "scipy>=1.14",
+  "numpy>=2.0",
+  "httpx>=0.27",
+  "openai>=1.55",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3"]
+
+[project.urls]
+Homepage = "https://github.com/Rusty-Hope/traceforge"
+Repository = "https://github.com/Rusty-Hope/traceforge"
+Issues = "https://github.com/Rusty-Hope/traceforge/issues"
+Changelog = "https://github.com/Rusty-Hope/traceforge/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

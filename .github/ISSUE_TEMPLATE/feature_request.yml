@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose an improvement or new capability for TraceForge
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the feature or API/UI change you have in mind.
+    validations:
+      required: true
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Alignment check
+      options:
+        - label: Keeps the hot path local and free of synchronous LLM calls
+        - label: Preserves the zero-chatbot, industrial UI design

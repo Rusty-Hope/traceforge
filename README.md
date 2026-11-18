@@ -1,6 +1,9 @@
 # TraceForge
 
 [![CI](https://github.com/Rusty-Hope/traceforge/actions/workflows/ci.yml/badge.svg)](https://github.com/Rusty-Hope/traceforge/actions/workflows/ci.yml)
+[![Container](https://github.com/Rusty-Hope/traceforge/actions/workflows/docker.yml/badge.svg)](https://github.com/Rusty-Hope/traceforge/actions/workflows/docker.yml)
+[![Release](https://img.shields.io/github/v/release/Rusty-Hope/traceforge?color=zinc)](https://github.com/Rusty-Hope/traceforge/releases)
+[![GHCR](https://img.shields.io/badge/ghcr.io-rusty--hope%2Ftraceforge-blue?logo=docker)](https://github.com/Rusty-Hope/traceforge/pkgs/container/traceforge)
 [![License: MIT](https://img.shields.io/badge/license-MIT-zinc.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](requirements.txt)
 [![React + TypeScript](https://img.shields.io/badge/frontend-React%2018%20%2B%20TS-3178c6.svg)](frontend/package.json)
@@ -77,7 +80,17 @@ flowchart LR
 
 ## Quickstart
 
-### Docker (full stack)
+### Prebuilt container (GitHub Packages / GHCR)
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
+  -v traceforge-data:/data \
+  ghcr.io/rusty-hope/traceforge:latest
+# dashboard + API → http://localhost:8000
+```
+
+### Docker Compose (full stack)
 
 ```bash
 cp .env.example .env    # paste OPENROUTER_API_KEY, or leave empty for ML-only mode
@@ -187,7 +200,14 @@ All settings live in `.env` (see `.env.example`). Highlights:
 ```
 backend/        FastAPI app, SQLite models (WAL), ML engine, simulator, LLM worker, reporting, SSE, ingest
 frontend/       React 18 + TypeScript + Tailwind + Recharts industrial dashboard
-tests/          pytest suite: ML units + pipeline integration + LLM contracts
+tests/          pytest suite: ML units + pipeline integration + LLM contracts + API integration
+Dockerfile      Single-container build (API + built frontend on :8000)
 docker-compose.yml
+pyproject.toml  PEP 621 project metadata & pytest config
 Makefile        install / api / web-dev / test / simulate / mock-llm / up
 ```
+
+## Contributing & License
+
+- See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md), and [CHANGELOG.md](CHANGELOG.md).
+- Released under the [MIT License](LICENSE).
