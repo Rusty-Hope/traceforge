@@ -1,5 +1,5 @@
 # Multi-stage single-container build: React UI + FastAPI/ML backend on :8000
-FROM node:20-alpine AS web-build
+FROM node:26-alpine AS web-build
 WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
